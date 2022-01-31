@@ -17,6 +17,8 @@
  * Since I bought a KeyYees Arduino Nano V3, I need to set the board to Arduino Nano and the bootloader to the ATMege 328 (Old Bootloader) to get it to program.
  * 
  * The cheap OLED's I bought from Amazon use 7 bit I2C addressing, so the I2C address 0s 0x3C, rather than 0x3D.
+ * 
+ * The photodiode I used uses negative logic.
  */
 
 #include <RingBuf.h>
@@ -31,25 +33,30 @@ const int LED_OUT = 3;
 const int LED_OUT_2 = 13;
 const int PD_IN = 2;
 
-volatile unsigned int start_time;
-volatile unsigned int last_time;
-volatile RingBuf<unsigned int, 10> average_times;
+volatile unsigned long start_time;
+volatile unsigned long last_time;
+volatile bool triggered;
+volatile RingBuf<unsigned long, 10> average_times;
 
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-void start_timer () {
-  start_time = micros();
-  digitalWrite(LED_OUT_2, HIGH);
-}
-
 void stop_timer () {
-  last_time = micros() - start_time;
-  if (average_times.isFull()) {
-    unsigned int temp;
-    average_times.pop(temp);
+  if (triggered) {
+    unsigned long now = micros();
+    if (now < start_time) {
+      last_time = 0; //Too short a measurement, or rollover has happened.
+    }
+    last_time = now - start_time - 10000;
+  
+    if (average_times.isFull()) {
+      unsigned long temp;
+      average_times.pop(temp);
+    }
+    average_times.push(last_time);
+    //noInterrupts();
+    triggered = false;
   }
-  average_times.push(last_time);
 }
 
 void update_display() {
@@ -66,7 +73,7 @@ void update_display() {
   display.println("Latency (ms): ");
   display.print("   ");
   display.println(static_cast<float>(last_time)/1000., DEC);
-  unsigned int ave_latency = 0;
+  unsigned long ave_latency = 0;
   for (int i = 0; i < average_times.size(); ++i) {
     ave_latency += average_times[i];
   }
@@ -89,7 +96,7 @@ void setup() {
   
   pinMode (LED_OUT, OUTPUT);
   digitalWrite(LED_OUT, LOW);
-  pinMode (PD_IN, INPUT);
+  pinMode (PD_IN, INPUT_PULLUP);
   pinMode (LED_OUT_2, OUTPUT);
   digitalWrite(LED_OUT_2, LOW);
 
@@ -101,14 +108,19 @@ void setup() {
   }
 
   display.display();
-
-  attachInterrupt(digitalPinToInterrupt (LED_OUT), start_timer, RISING);
-  attachInterrupt(digitalPinToInterrupt (PD_IN), stop_timer, RISING);
+  triggered = false;
+  attachInterrupt(digitalPinToInterrupt (PD_IN), stop_timer, FALLING);
 }
 
 void loop() {
   update_display();
-  digitalWrite(LED_OUT, HIGH);
+  
+  start_time = micros();
+  triggered = true;
+  //interrupts();
+  delay(10);
+  digitalWrite(LED_OUT_2, HIGH);
+  digitalWrite(LED_OUT, HIGH); 
   delay(100);
   digitalWrite(LED_OUT, LOW);
   digitalWrite(LED_OUT_2, LOW);
